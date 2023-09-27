@@ -1,19 +1,4 @@
-/* main.c - Application main entry point */
-
 /*
- * Copyright (c) 2017 Intel Corporation
- *
- * SPDX-License-Identifier: Apache-2.0
- */
-
-/*
- * This application is specific to the Nordic nRF52840-PDK board.
- *
- * It supports the 4 buttons and 4 LEDs as mesh clients and servers.
- *
- * Prior to provisioning, a button inverts the state of the
- * corresponding LED.
- *
  * The unprovisioned beacon uses the device address set by Nordic
  * in the FICR as its UUID and is presumed unique.
  *
@@ -31,8 +16,6 @@
  * Messages from a button to its corresponding LED are ignored as
  * the LED's state has already been changed locally by the button client.
  *
- * The buttons are debounced at a nominal 250ms. That value can be
- * changed as needed.
  *
  */
 
@@ -73,16 +56,10 @@ static int gen_onoff_status(struct bt_mesh_model *model,
 /*
  * Client Configuration Declaration
  */
-
+static bool attention;
 static struct bt_mesh_cfg_cli cfg_cli = {
 };
 
-/*
- * Health Server Declaration
- */
-
-static struct bt_mesh_health_srv health_srv = {
-};
 
 /*
  * Publication Declarations
@@ -106,11 +83,11 @@ BT_MESH_HEALTH_PUB_DEFINE(health_pub, 0);
 BT_MESH_MODEL_PUB_DEFINE(gen_onoff_pub_srv, NULL, 2 + 2);
 BT_MESH_MODEL_PUB_DEFINE(gen_onoff_pub_cli, NULL, 2 + 2);
 BT_MESH_MODEL_PUB_DEFINE(gen_onoff_pub_srv_s_0, NULL, 2 + 2);
-BT_MESH_MODEL_PUB_DEFINE(gen_onoff_pub_cli_s_0, NULL, 2 + 2);
-BT_MESH_MODEL_PUB_DEFINE(gen_onoff_pub_srv_s_1, NULL, 2 + 2);
-BT_MESH_MODEL_PUB_DEFINE(gen_onoff_pub_cli_s_1, NULL, 2 + 2);
-BT_MESH_MODEL_PUB_DEFINE(gen_onoff_pub_srv_s_2, NULL, 2 + 2);
-BT_MESH_MODEL_PUB_DEFINE(gen_onoff_pub_cli_s_2, NULL, 2 + 2);
+//BT_MESH_MODEL_PUB_DEFINE(gen_onoff_pub_cli_s_0, NULL, 2 + 2);
+//BT_MESH_MODEL_PUB_DEFINE(gen_onoff_pub_srv_s_1, NULL, 2 + 2);
+//BT_MESH_MODEL_PUB_DEFINE(gen_onoff_pub_cli_s_1, NULL, 2 + 2);
+//BT_MESH_MODEL_PUB_DEFINE(gen_onoff_pub_srv_s_2, NULL, 2 + 2);
+//BT_MESH_MODEL_PUB_DEFINE(gen_onoff_pub_cli_s_2, NULL, 2 + 2);
 
 /*
  * Models in an element must have unique op codes.
@@ -144,7 +121,8 @@ static const struct bt_mesh_model_op gen_onoff_cli_op[] = {
 
 struct onoff_state {
 	const struct gpio_dt_spec led_device;
-	uint8_t current;
+	uint8_t server_num;
+	int8_t current;
 	uint8_t previous;
 };
 
@@ -154,11 +132,52 @@ struct onoff_state {
  */
 
 static struct onoff_state onoff_state[] = {
-	{ .led_device = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios), },
-	{ .led_device = GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios), },
-	{ .led_device = GPIO_DT_SPEC_GET(DT_ALIAS(led2), gpios), },
-	{ .led_device = GPIO_DT_SPEC_GET(DT_ALIAS(led3), gpios), },
+	{ .led_device = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios), .server_num = 0,},
+	{ .led_device = GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios), .server_num= 1,},
+	{ .led_device = GPIO_DT_SPEC_GET(DT_ALIAS(led2), gpios), .server_num= 2,},
+	{ .led_device = GPIO_DT_SPEC_GET(DT_ALIAS(led3), gpios), .server_num= 3,},
 };
+
+/*
+ * Health Server Declaration
+ */
+static struct k_work_delayable attention_blink_work;
+
+static void attention_blink(struct k_work *work)
+{	
+	static int idx =0;
+	struct onoff_state health_led = onoff_state[1];
+	if (attention) {				
+		gpio_pin_set_dt(&health_led.led_device, (idx++)%2);
+		k_work_reschedule(&attention_blink_work, K_MSEC(30));
+	} else {
+		gpio_pin_set_dt(&health_led.led_device, 0);
+	}
+	
+	k_work_reschedule(&attention_blink_work, K_MSEC(30));
+}
+
+static void attention_on(struct bt_mesh_model *mod)
+{
+	attention = true;
+	k_work_reschedule(&attention_blink_work, K_NO_WAIT);
+}
+
+static void attention_off(struct bt_mesh_model *mod)
+{
+	/* Will stop rescheduling blink timer */
+	attention = false;
+}
+
+static const struct bt_mesh_health_srv_cb health_srv_cb = {
+	.attn_on = attention_on,
+	.attn_off = attention_off,
+};
+
+static struct bt_mesh_health_srv health_srv = {
+	.cb = &health_srv_cb,
+};
+
 
 /*
  *
@@ -184,31 +203,31 @@ static struct bt_mesh_model root_models[] = {
 static struct bt_mesh_model secondary_0_models[] = {
 	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_ONOFF_SRV, gen_onoff_srv_op,
 		      &gen_onoff_pub_srv_s_0, &onoff_state[1]),
-	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_ONOFF_CLI, gen_onoff_cli_op,
-		      &gen_onoff_pub_cli_s_0, &onoff_state[1]),
+	// BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_ONOFF_CLI, gen_onoff_cli_op,
+	// 	      &gen_onoff_pub_cli_s_0, &onoff_state[1]),
 };
 
 /*
  * Element 2 Models
  */
 
-static struct bt_mesh_model secondary_1_models[] = {
-	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_ONOFF_SRV, gen_onoff_srv_op,
-		      &gen_onoff_pub_srv_s_1, &onoff_state[2]),
-	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_ONOFF_CLI, gen_onoff_cli_op,
-		      &gen_onoff_pub_cli_s_1, &onoff_state[2]),
-};
+// static struct bt_mesh_model secondary_1_models[] = {
+// 	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_ONOFF_SRV, gen_onoff_srv_op,
+// 		      &gen_onoff_pub_srv_s_1, &onoff_state[2]),
+// 	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_ONOFF_CLI, gen_onoff_cli_op,
+// 		      &gen_onoff_pub_cli_s_1, &onoff_state[2]),
+// };
 
 /*
  * Element 3 Models
  */
 
-static struct bt_mesh_model secondary_2_models[] = {
-	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_ONOFF_SRV, gen_onoff_srv_op,
-		      &gen_onoff_pub_srv_s_2, &onoff_state[3]),
-	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_ONOFF_CLI, gen_onoff_cli_op,
-		      &gen_onoff_pub_cli_s_2, &onoff_state[3]),
-};
+// static struct bt_mesh_model secondary_2_models[] = {
+// 	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_ONOFF_SRV, gen_onoff_srv_op,
+// 		      &gen_onoff_pub_srv_s_2, &onoff_state[3]),
+// 	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_ONOFF_CLI, gen_onoff_cli_op,
+// 		      &gen_onoff_pub_cli_s_2, &onoff_state[3]),
+// };
 
 /*
  * Button to Client Model Assignments
@@ -216,9 +235,9 @@ static struct bt_mesh_model secondary_2_models[] = {
 
 struct bt_mesh_model *mod_cli_sw[] = {
 		&root_models[4],
-		&secondary_0_models[1],
-		&secondary_1_models[1],
-		&secondary_2_models[1],
+		// &secondary_0_models[1],
+		// &secondary_1_models[1],
+		// &secondary_2_models[1],
 };
 
 /*
@@ -228,8 +247,8 @@ struct bt_mesh_model *mod_cli_sw[] = {
 struct bt_mesh_model *mod_srv_sw[] = {
 		&root_models[3],
 		&secondary_0_models[0],
-		&secondary_1_models[0],
-		&secondary_2_models[0],
+		// &secondary_1_models[0],
+		// &secondary_2_models[0],
 };
 
 /*
@@ -239,8 +258,6 @@ struct bt_mesh_model *mod_srv_sw[] = {
 static struct bt_mesh_elem elements[] = {
 	BT_MESH_ELEM(0, root_models, BT_MESH_MODEL_NONE),
 	BT_MESH_ELEM(0, secondary_0_models, BT_MESH_MODEL_NONE),
-	BT_MESH_ELEM(0, secondary_1_models, BT_MESH_MODEL_NONE),
-	BT_MESH_ELEM(0, secondary_2_models, BT_MESH_MODEL_NONE),
 };
 
 static const struct bt_mesh_comp comp = {
@@ -249,28 +266,14 @@ static const struct bt_mesh_comp comp = {
 	.elem_count = ARRAY_SIZE(elements),
 };
 
-static const struct gpio_dt_spec sw_device[4] = {
-	GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios),
-	GPIO_DT_SPEC_GET(DT_ALIAS(sw1), gpios),
-	GPIO_DT_SPEC_GET(DT_ALIAS(sw2), gpios),
-	GPIO_DT_SPEC_GET(DT_ALIAS(sw3), gpios),
-};
+// static const struct gpio_dt_spec sw_device[1] = {
+// 	GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios),
+// 	// GPIO_DT_SPEC_GET(DT_ALIAS(sw1), gpios),
+// 	// GPIO_DT_SPEC_GET(DT_ALIAS(sw2), gpios),
+// 	// GPIO_DT_SPEC_GET(DT_ALIAS(sw3), gpios),
+// };
 
-struct sw {
-	uint8_t sw_num;
-	uint8_t onoff_state;
-	struct k_work button_work;
-	struct k_timer button_timer;
-};
-
-
-static uint8_t button_press_cnt;
-static struct sw sw;
-
-static struct gpio_callback button_cb;
-
-static uint8_t trans_id;
-static uint32_t time, last_time;
+//static uint8_t trans_id;
 static uint16_t primary_addr;
 static uint16_t primary_net_idx;
 
@@ -304,13 +307,12 @@ static int gen_onoff_set_unack(struct bt_mesh_model *model,
 			       struct bt_mesh_msg_ctx *ctx,
 			       struct net_buf_simple *buf)
 {
-	struct net_buf_simple *msg = model->pub->msg;
+	//struct net_buf_simple *msg = model->pub->msg;
 	struct onoff_state *onoff_state = model->user_data;
-	int err;
+	
 
 	onoff_state->current = net_buf_simple_pull_u8(buf);
-	printk("addr 0x%02x state 0x%02x\n",
-	       bt_mesh_model_elem(model)->addr, onoff_state->current);
+	printk("server %i, addr 0x%02x state 0x%02x\n", onoff_state->server_num, bt_mesh_model_elem(model)->addr, onoff_state->current);
 
 	gpio_pin_set_dt(&onoff_state->led_device, onoff_state->current);
 
@@ -323,19 +325,19 @@ static int gen_onoff_set_unack(struct bt_mesh_model *model,
 	 * Only publish if there is an assigned address
 	 */
 
-	if (onoff_state->previous != onoff_state->current &&
-	    model->pub->addr != BT_MESH_ADDR_UNASSIGNED) {
-		printk("publish last 0x%02x cur 0x%02x\n",
-		       onoff_state->previous, onoff_state->current);
-		onoff_state->previous = onoff_state->current;
-		bt_mesh_model_msg_init(msg,
-				       BT_MESH_MODEL_OP_GEN_ONOFF_STATUS);
-		net_buf_simple_add_u8(msg, onoff_state->current);
-		err = bt_mesh_model_publish(model);
-		if (err) {
-			printk("bt_mesh_model_publish err %d\n", err);
-		}
-	}
+	// if (onoff_state->previous != onoff_state->current &&
+	//     model->pub->addr != BT_MESH_ADDR_UNASSIGNED) {
+	// 	printk("publish last 0x%02x cur 0x%02x\n",
+	// 	       onoff_state->previous, onoff_state->current);
+	// 	onoff_state->previous = onoff_state->current;
+	// 	bt_mesh_model_msg_init(msg,
+	// 			       BT_MESH_MODEL_OP_GEN_ONOFF_STATUS);
+	// 	net_buf_simple_add_u8(msg, onoff_state->current);
+	// 	err = bt_mesh_model_publish(model);
+	// 	if (err) {
+	// 		printk("bt_mesh_model_publish err %d\n", err);
+	// 	}
+	// }
 
 	return 0;
 }
@@ -400,82 +402,40 @@ static uint8_t dev_uuid[16] = { 0xdd, 0xdd };
  * Change to select different GPIO input pins
  */
 
-static uint8_t pin_to_sw(uint32_t pin_pos)
+// static uint8_t pin_to_sw(uint32_t pin_pos)
+// {
+// 	switch (pin_pos) {
+// 	case BIT(DT_GPIO_PIN(DT_ALIAS(sw0), gpios)): return 0;
+// 	case BIT(DT_GPIO_PIN(DT_ALIAS(sw1), gpios)): return 1;
+// 	case BIT(DT_GPIO_PIN(DT_ALIAS(sw2), gpios)): return 2;
+// 	case BIT(DT_GPIO_PIN(DT_ALIAS(sw3), gpios)): return 3;
+// 	}
+
+// 	printk("No match for GPIO pin 0x%08x\n", pin_pos);
+// 	return 0;
+// }
+struct buttonwork {
+    struct k_work work;
+    uint8_t button_pressed;
+};
+
+static uint8_t trans_id = 0;
+
+static void button_pressed_worker(struct k_work *workitem)
 {
-	switch (pin_pos) {
-	case BIT(DT_GPIO_PIN(DT_ALIAS(sw0), gpios)): return 0;
-	case BIT(DT_GPIO_PIN(DT_ALIAS(sw1), gpios)): return 1;
-	case BIT(DT_GPIO_PIN(DT_ALIAS(sw2), gpios)): return 2;
-	case BIT(DT_GPIO_PIN(DT_ALIAS(sw3), gpios)): return 3;
-	}
+	struct buttonwork *button = CONTAINER_OF(workitem, struct buttonwork, work);
 
-	printk("No match for GPIO pin 0x%08x\n", pin_pos);
-	return 0;
-}
-
-static void button_pressed(const struct device *dev, struct gpio_callback *cb,
-			   uint32_t pin_pos)
-{
-	/*
-	 * One button press within a 1 second interval sends an on message
-	 * More than one button press sends an off message
-	 */
-
-	time = k_uptime_get_32();
-
-	/* debounce the switch */
-	if (time < last_time + BUTTON_DEBOUNCE_DELAY_MS) {
-		last_time = time;
-		return;
-	}
-
-	if (button_press_cnt == 0U) {
-		k_timer_start(&sw.button_timer, K_SECONDS(1), K_NO_WAIT);
-	}
-
-	printk("button_press_cnt 0x%02x\n", button_press_cnt);
-	button_press_cnt++;
-
-	/* The variable pin_pos is the pin position in the GPIO register,
-	 * not the pin number. It's assumed that only one bit is set.
-	 */
-
-	sw.sw_num = pin_to_sw(pin_pos);
-	last_time = time;
-}
-
-/*
- * Button Count Timer Worker
- */
-
-static void button_cnt_timer(struct k_timer *work)
-{
-	struct sw *button_sw = CONTAINER_OF(work, struct sw, button_timer);
-
-	button_sw->onoff_state = button_press_cnt == 1U ? 1 : 0;
-	printk("button_press_cnt 0x%02x onoff_state 0x%02x\n",
-	       button_press_cnt, button_sw->onoff_state);
-	button_press_cnt = 0U;
-	k_work_submit(&sw.button_work);
-}
-
-/*
- * Button Pressed Worker Task
- */
-
-static void button_pressed_worker(struct k_work *work)
-{
-	struct bt_mesh_model *mod_cli, *mod_srv;
-	struct bt_mesh_model_pub *pub_cli, *pub_srv;
-	struct sw *sw = CONTAINER_OF(work, struct sw, button_work);
+	struct bt_mesh_model *mod_cli; // *mod_srv;
+	struct bt_mesh_model_pub *pub_cli; // *pub_srv;
+	
 	int err;
-	uint8_t sw_idx = sw->sw_num;
+	
 
-	mod_cli = mod_cli_sw[sw_idx];
+	mod_cli = mod_cli_sw[0];
 	pub_cli = mod_cli->pub;
 
-	mod_srv = mod_srv_sw[sw_idx];
-	pub_srv = mod_srv->pub;
+	// mod_srv = mod_srv_sw[0];
+	// pub_srv = mod_srv->pub;
 
 	/* If unprovisioned, just call the set function.
 	 * The intent is to have switch-like behavior
@@ -487,36 +447,54 @@ static void button_pressed_worker(struct k_work *work)
 	 * address or a group to which the led is subscribed.
 	 */
 
-	if (primary_addr == BT_MESH_ADDR_UNASSIGNED) {
-		NET_BUF_SIMPLE_DEFINE(msg, 1);
-		struct bt_mesh_msg_ctx ctx = {
-			.addr = sw_idx + primary_addr,
-		};
+	// if (primary_addr == BT_MESH_ADDR_UNASSIGNED) {
+	// 	NET_BUF_SIMPLE_DEFINE(msg, 1);
+	// 	struct bt_mesh_msg_ctx ctx = {
+	// 		.addr = 0 + primary_addr,
+	// 	};
 
 		/* This is a dummy message sufficient
 		 * for the led server
 		 */
 
-		net_buf_simple_add_u8(&msg, sw->onoff_state);
-		(void)gen_onoff_set_unack(mod_srv, &ctx, &msg);
-		return;
-	}
+		// net_buf_simple_add_u8(&msg, sw->onoff_state);
+		// (void)gen_onoff_set_unack(mod_srv, &ctx, &msg);
+		// return;
+	//}
+	printk("publish to 0x%04x onoff 0x%02x\n", pub_cli->addr, button->button_pressed);
 
 	if (pub_cli->addr == BT_MESH_ADDR_UNASSIGNED) {
 		return;
-	}
-
-	printk("publish to 0x%04x onoff 0x%04x sw_idx 0x%04x\n",
-	       pub_cli->addr, sw->onoff_state, sw_idx);
-	bt_mesh_model_msg_init(pub_cli->msg,
-			       BT_MESH_MODEL_OP_GEN_ONOFF_SET);
-	net_buf_simple_add_u8(pub_cli->msg, sw->onoff_state);
-	net_buf_simple_add_u8(pub_cli->msg, trans_id++);
+	}	
+	
+	bt_mesh_model_msg_init(pub_cli->msg, BT_MESH_MODEL_OP_GEN_ONOFF_SET);
+	net_buf_simple_add_u8(pub_cli->msg, button->button_pressed); 
+	net_buf_simple_add_u8(pub_cli->msg, trans_id++); //whithout this does not work
 	err = bt_mesh_model_publish(mod_cli);
 	if (err) {
 		printk("bt_mesh_model_publish err %d\n", err);
 	}
 }
+
+K_WORK_DEFINE(button0_work, button_pressed_worker);
+
+
+static void button_pressed(const struct device *dev, struct gpio_callback *cb,
+			   uint32_t pin_pos)
+{	
+	int state1 = gpio_pin_get(dev, DT_GPIO_PIN(DT_ALIAS(sw0), gpios));		
+	//do the above but get button fro
+
+	struct buttonwork button0 = {
+        .button_pressed = state1,
+		.work = button0_work,
+    };
+	
+	k_work_submit(&button0.work);
+}
+
+
+
 
 /* Disable OOB security for SILabs Android app */
 
@@ -573,46 +551,60 @@ static void bt_ready(int err)
 	printk("Mesh initialized\n");
 }
 
+
+
+static void setcallback() {
+	
+	
+	static struct gpio_callback button_cb;
+	static const struct gpio_dt_spec sw_device = GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
+	gpio_init_callback(&button_cb, button_pressed,  BIT(sw_device.pin));
+	__ASSERT(device_is_ready(sw_device.port), "Device not ready");
+	// if (!device_is_ready(sw_device.port)) {
+	// 	printk("GPIO controller device is not ready\n");
+	// 	return 0;
+	// }
+	gpio_pin_configure_dt(&sw_device, GPIO_INPUT);
+	gpio_pin_interrupt_configure_dt(&sw_device,  GPIO_INT_EDGE_BOTH);
+	gpio_add_callback(sw_device.port, &button_cb);
+	
+	//k_work_init(&button0.workitem, button_pressed_worker);
+	//k_timer_init(&sw.button_timer, button_cnt_timer, NULL);
+}
+
+
 int main(void)
 {
-	int err, i;
+	int err;
 
 	printk("Initializing...\n");
 
 	/* Initialize the button debouncer */
-	last_time = k_uptime_get_32();
+	// last_time = k_uptime_get_32();
 
 	/* Initialize button worker task*/
-	k_work_init(&sw.button_work, button_pressed_worker);
+	 
 
 	/* Initialize button count timer */
-	k_timer_init(&sw.button_timer, button_cnt_timer, NULL);
+	// 
 
-	gpio_init_callback(&button_cb, button_pressed,
-			   BIT(sw_device[0].pin) | BIT(sw_device[1].pin) |
-			   BIT(sw_device[2].pin) | BIT(sw_device[3].pin));
+	
 
-	for (i = 0; i < ARRAY_SIZE(sw_device); i++) {
-		if (!device_is_ready(sw_device[i].port)) {
-			printk("SW%d GPIO controller device is not ready\n", i);
-			return 0;
-		}
-		gpio_pin_configure_dt(&sw_device[i], GPIO_INPUT);
-		gpio_pin_interrupt_configure_dt(&sw_device[i], GPIO_INT_EDGE_TO_ACTIVE);
-		gpio_add_callback(sw_device[i].port, &button_cb);
-	}
-
-
+	//for (i = 0; i < ARRAY_SIZE(sw_device); i++) {
+	
+	//}
+	
+	setcallback();
+	k_work_init_delayable(&attention_blink_work, attention_blink);
 	/* Initialize LED's */
-	for (i = 0; i < ARRAY_SIZE(onoff_state); i++) {
-		if (!device_is_ready(onoff_state[i].led_device.port)) {
-			printk("LED%d GPIO controller device is not ready\n", i);
-			return 0;
-		}
-		gpio_pin_configure_dt(&onoff_state[i].led_device, GPIO_OUTPUT_INACTIVE);
-	}
+	//for (i = 0; i < ARRAY_SIZE(onoff_state); i++) {
+	for(int x=0; x< ARRAY_SIZE(onoff_state); x++) {
+		__ASSERT(device_is_ready(onoff_state[x].led_device.port), "LED GPIO controller device is not ready\n");			
+		gpio_pin_configure_dt(&onoff_state[x].led_device, GPIO_OUTPUT_INACTIVE);
+	}	
+	//}
 
-	/* Initialize the Bluetooth Subsystem */
+	/* Initialize the Bluetooth Subsystem */	
 	err = bt_enable(bt_ready);
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
