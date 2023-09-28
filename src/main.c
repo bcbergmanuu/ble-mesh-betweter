@@ -33,10 +33,10 @@
 #include <zephyr/logging/log.h>
 #include "shiftregister.h"
 
-#ifdef CONFIG_USB_DEVICE_STACK
-#include <zephyr/drivers/uart.h>
-#include <zephyr/usb/usb_device.h>
-#endif
+// #ifdef CONFIG_USB_DEVICE_STACK
+// #include <zephyr/drivers/uart.h>
+// #include <zephyr/usb/usb_device.h>
+// #endif
 
 LOG_MODULE_REGISTER(onoffapp, LOG_LEVEL_DBG);
 
@@ -318,7 +318,7 @@ static int gen_onoff_get(struct bt_mesh_model *model,
 }
 
 
-static uint8_t currentstate = 0;
+static uint8_t currentstate = 2;
 static void state_update_delaywork(struct k_work *work) {
 	if(onoff_state[0].current == 1 && onoff_state[1].current == 1)
 	onoff_state[0].istriggered = 0;
@@ -348,14 +348,14 @@ static void gamestate() {
 		}
 	
 	} else if(currentstate == 2) {		
-		if(onoff_state[0].current == 1 && onoff_state[1].current == 1) {			
-			gpio_pin_set_dt(&flashlight, 0);  //turn off flashlight
+		if(onoff_state[0].current == 1 && onoff_state[1].current == 1) {						
 			k_work_reschedule(&stateupdate, K_SECONDS(1));
 		}	//both buttons are pressed again to start the game
 	
 	} else if(currentstate == 3) { //trigger set to zero, when ether button is released the clock starts
 		if(onoff_state[0].current == 0 || onoff_state[1].current == 0) {						
 			start_clock();
+			gpio_pin_set_dt(&flashlight, 0);  //turn off flashlight
 			currentstate = 0;
 		}
 	}
@@ -609,6 +609,15 @@ static void bt_ready(int err)
 static void sw_pressed(const struct device *dev, struct gpio_callback *cb,
 	uint32_t pin_pos) {
 		
+	// static uint32_t time, last_time;
+	// time = k_uptime_get_32();
+
+	// /* debounce the switch */
+	// if (time < last_time + 250) { //250ms		
+	// 	return;
+	// }
+	// last_time = time;
+
     struct gpio_dt_spec switches[] = {
 		GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios),
 #if DT_NODE_HAS_STATUS(DT_ALIAS(sw1), okay)	
@@ -678,43 +687,43 @@ static void callbackbuttons() {
 
 }
 
-#ifdef CONFIG_USB_DEVICE_STACK
-void enable_usbcdc()
-{	
-	const struct device *dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
-	__ASSERT(device_is_ready(dev), "console not ready");
-	uint32_t dtr = 0;
+// #ifdef CONFIG_USB_DEVICE_STACK
+// void enable_usbcdc()
+// {	
+// 	const struct device *dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
+// 	__ASSERT(device_is_ready(dev), "console not ready");
+// 	uint32_t dtr = 0;
 
-	if (usb_enable(NULL)) {
-		return;
-	}
+// 	if (usb_enable(NULL)) {
+// 		return;
+// 	}
 
-	/* Poll if the DTR flag was set */
-	while (!dtr) {
-		uart_line_ctrl_get(dev, UART_LINE_CTRL_DTR, &dtr);
-		/* Give CPU resources to low priority threads. */
-		k_sleep(K_MSEC(100));
-	}	
-}
-#endif
+// 	/* Poll if the DTR flag was set */
+// 	while (!dtr) {
+// 		uart_line_ctrl_get(dev, UART_LINE_CTRL_DTR, &dtr);
+// 		/* Give CPU resources to low priority threads. */
+// 		k_sleep(K_MSEC(100));
+// 	}	
+// }
+// #endif
 
 int main(void)
 {
 	int err;
-#ifdef CONFIG_USB_DEVICE_STACK
-	enable_usbcdc();
-	console_init();
-	k_sleep(K_MSEC(2000));
-	printk("delete flash? y/n\n");
-	uint8_t c = console_getchar();
-	if (c == 'y') {
-		printk("deleting flash\n");
-	 	bt_mesh_reset();
+// #ifdef CONFIG_USB_DEVICE_STACK
+// 	enable_usbcdc();
+// 	console_init();
+// 	k_sleep(K_MSEC(2000));
+// 	printk("delete flash? y/n\n");
+// 	uint8_t c = console_getchar();
+// 	if (c == 'y') {
+// 		printk("deleting flash\n");
+// 	 	bt_mesh_reset();
 
-	} else {
-	 	printk("not deleting flash: %c\n", c);
-	}
-#endif
+// 	} else {
+// 	 	printk("not deleting flash: %c\n", c);
+// 	}
+// #endif
 	err = gpio_pin_configure_dt(&flashlight, GPIO_OUTPUT_INACTIVE);
 
 	printk("Initializing...\n");

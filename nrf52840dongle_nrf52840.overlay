@@ -24,6 +24,14 @@
                     //    <&gpio0 24 (GPIO_ACTIVE_LOW)>;                                              
         flashlight-gpios = <&gpio0 2 (GPIO_ACTIVE_HIGH)>;
     };
+    
+    buttons {
+		compatible = "gpio-keys";
+		button0: button_0 {
+			gpios = <&gpio1 15 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "Push button switch 0";
+		};
+	};
 };
 
 &zephyr_udc0 {
@@ -35,3 +43,4 @@
 &uart0 {
     status = "disabled";
 };
+

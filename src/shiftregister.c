@@ -107,6 +107,6 @@ int init_clock()
 		}
 	}
 
-  k_timer_start(&clocktimer, K_SECONDS(1), K_SECONDS(1));	
+  //k_timer_start(&clocktimer, K_SECONDS(1), K_SECONDS(1));	
 	return 0;
 }
