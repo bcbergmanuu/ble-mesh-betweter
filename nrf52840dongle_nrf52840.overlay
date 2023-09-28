@@ -10,3 +10,28 @@
 
 // For more help, browse the DeviceTree documentation at https://docs.zephyrproject.org/latest/guides/dts/index.html
 // You can also visit the nRF DeviceTree extension documentation at https://nrfconnect.github.io/vscode-nrf-connect/devicetree/nrfdevicetree.html
+
+/ {
+    chosen {
+		zephyr,shell-uart = &cdc_acm_uart0;
+    };
+
+    zephyr,user {
+        relais-gpios = <&gpio0 13 (GPIO_ACTIVE_HIGH)>,
+                       <&gpio0 15 (GPIO_ACTIVE_HIGH)>,
+                       <&gpio0 17 (GPIO_ACTIVE_HIGH)>;  
+                    //    <&gpio0 22 (GPIO_ACTIVE_LOW)>,
+                    //    <&gpio0 24 (GPIO_ACTIVE_LOW)>;                                              
+        flashlight-gpios = <&gpio0 2 (GPIO_ACTIVE_HIGH)>;
+    };
+};
+
+&zephyr_udc0 {
+	cdc_acm_uart0: cdc_acm_uart0 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+};
+
+&uart0 {
+    status = "disabled";
+};

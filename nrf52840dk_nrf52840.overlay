@@ -1,12 +1,19 @@
-// To get started, press Ctrl+Space to bring up the completion menu and view the available nodes.
 
-// You can also use the buttons in the sidebar to perform actions on nodes.
-// Actions currently available include:
+/ {
+    zephyr,user {
+        relais-gpios = <&gpio0 27 (GPIO_ACTIVE_HIGH)>,
+                       <&gpio0 26 (GPIO_ACTIVE_HIGH)>,
+                       <&gpio0 2 (GPIO_ACTIVE_HIGH)>,
+                       <&gpio1 15 (GPIO_ACTIVE_HIGH)>;
+                    //    <&gpio0 22 (GPIO_ACTIVE_LOW)>,
+                    //    <&gpio0 24 (GPIO_ACTIVE_LOW)>;                                              
+    };
+};
 
-// * Enabling / disabling the node
-// * Adding the bus to a bus
-// * Removing the node
-// * Connecting ADC channels
+&i2c0 {
+    status = "disabled";
+};
 
-// For more help, browse the DeviceTree documentation at https://docs.zephyrproject.org/latest/guides/dts/index.html
-// You can also visit the nRF DeviceTree extension documentation at https://nrfconnect.github.io/vscode-nrf-connect/devicetree/nrfdevicetree.html
+&spi3{
+    status = "disabled";
+};

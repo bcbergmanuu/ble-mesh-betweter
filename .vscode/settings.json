@@ -1,5 +1,8 @@
 {
     "nrf-connect.debugging.bindings": {
         "${workspaceFolder}/build_dk": "Launch build_dk"
+    },
+    "files.associations": {
+        "uart.h": "c"
     }
 }

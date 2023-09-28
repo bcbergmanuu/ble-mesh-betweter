@@ -30,6 +30,18 @@
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/bluetooth/mesh.h>
 #include <stdio.h>
+#include <zephyr/logging/log.h>
+#include "shiftregister.h"
+
+#ifdef CONFIG_USB_DEVICE_STACK
+#include <zephyr/drivers/uart.h>
+#include <zephyr/usb/usb_device.h>
+#endif
+
+LOG_MODULE_REGISTER(onoffapp, LOG_LEVEL_DBG);
+
+#define ZEPHYR_USER_NODE DT_PATH(zephyr_user)
+struct gpio_dt_spec flashlight = GPIO_DT_SPEC_GET_OR (ZEPHYR_USER_NODE, flashlight_gpios, {0});
 
 /* Model Operation Codes */
 #define BT_MESH_MODEL_OP_GEN_ONOFF_GET		BT_MESH_MODEL_OP_2(0x82, 0x01)
@@ -123,7 +135,8 @@ struct onoff_state {
 	const struct gpio_dt_spec led_device;
 	uint8_t server_num;
 	int8_t current;
-	uint8_t previous;
+	//uint8_t previous;
+	uint8_t istriggered;
 };
 
 /*
@@ -141,8 +154,11 @@ static struct onoff_state onoff_state[] = {
 /*
  * Health Server Declaration
  */
-static struct k_work_delayable attention_blink_work;
+//static struct k_work_delayable attention_blink_work;
 
+static void attention_blink(struct k_work *work);
+
+K_WORK_DELAYABLE_DEFINE(attention_blink_work, attention_blink);
 static void attention_blink(struct k_work *work)
 {	
 	static int idx =0;
@@ -156,6 +172,8 @@ static void attention_blink(struct k_work *work)
 	
 	k_work_reschedule(&attention_blink_work, K_MSEC(30));
 }
+
+
 
 static void attention_on(struct bt_mesh_model *mod)
 {
@@ -266,12 +284,6 @@ static const struct bt_mesh_comp comp = {
 	.elem_count = ARRAY_SIZE(elements),
 };
 
-// static const struct gpio_dt_spec sw_device[1] = {
-// 	GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios),
-// 	// GPIO_DT_SPEC_GET(DT_ALIAS(sw1), gpios),
-// 	// GPIO_DT_SPEC_GET(DT_ALIAS(sw2), gpios),
-// 	// GPIO_DT_SPEC_GET(DT_ALIAS(sw3), gpios),
-// };
 
 //static uint8_t trans_id;
 static uint16_t primary_addr;
@@ -288,6 +300,8 @@ static int gen_onoff_get(struct bt_mesh_model *model,
 			 struct bt_mesh_msg_ctx *ctx,
 			 struct net_buf_simple *buf)
 {
+	//thing this does nothing 
+	//return 0;
 	NET_BUF_SIMPLE_DEFINE(msg, 2 + 1 + 4);
 	struct onoff_state *onoff_state = model->user_data;
 
@@ -303,6 +317,51 @@ static int gen_onoff_get(struct bt_mesh_model *model,
 	return 0;
 }
 
+
+static uint8_t currentstate = 0;
+static void state_update_delaywork(struct k_work *work) {
+	if(onoff_state[0].current == 1 && onoff_state[1].current == 1)
+	onoff_state[0].istriggered = 0;
+	onoff_state[1].istriggered = 0;		
+	currentstate = 3;
+	printk("new delayed state %i\n", currentstate);
+}
+
+K_WORK_DELAYABLE_DEFINE(stateupdate, state_update_delaywork);
+
+
+static void gamestate() {
+	
+	printk("current state %i\n", currentstate);
+	
+	if(currentstate == 0) { //running state
+		
+		if(onoff_state[0].istriggered && onoff_state[1].istriggered) {						
+			stop_clock();
+			gpio_pin_set_dt(&flashlight, 1);  //turn on flashlight
+			currentstate = 1; //two buttons have been pressed
+		}			
+	
+	} else if(currentstate == 1) {
+		if(onoff_state[0].current == 0 && onoff_state[1].current == 0) {							
+			currentstate = 2; //both buttons are released
+		}
+	
+	} else if(currentstate == 2) {		
+		if(onoff_state[0].current == 1 && onoff_state[1].current == 1) {			
+			gpio_pin_set_dt(&flashlight, 0);  //turn off flashlight
+			k_work_reschedule(&stateupdate, K_SECONDS(1));
+		}	//both buttons are pressed again to start the game
+	
+	} else if(currentstate == 3) { //trigger set to zero, when ether button is released the clock starts
+		if(onoff_state[0].current == 0 || onoff_state[1].current == 0) {						
+			start_clock();
+			currentstate = 0;
+		}
+	}
+	printk("new state %i\n", currentstate);
+}
+
 static int gen_onoff_set_unack(struct bt_mesh_model *model,
 			       struct bt_mesh_msg_ctx *ctx,
 			       struct net_buf_simple *buf)
@@ -315,7 +374,12 @@ static int gen_onoff_set_unack(struct bt_mesh_model *model,
 	printk("server %i, addr 0x%02x state 0x%02x\n", onoff_state->server_num, bt_mesh_model_elem(model)->addr, onoff_state->current);
 
 	gpio_pin_set_dt(&onoff_state->led_device, onoff_state->current);
-
+	
+	if(onoff_state->current){
+		onoff_state->istriggered = 1;
+	}
+	
+	gamestate();
 	/*
 	 * If a server has a publish address, it is required to
 	 * publish status on a state change
@@ -395,35 +459,37 @@ static void prov_reset(void)
 
 static uint8_t dev_uuid[16] = { 0xdd, 0xdd };
 
-#define BUTTON_DEBOUNCE_DELAY_MS 250
-
-/*
- * Map GPIO pins to button number
- * Change to select different GPIO input pins
- */
-
-// static uint8_t pin_to_sw(uint32_t pin_pos)
-// {
-// 	switch (pin_pos) {
-// 	case BIT(DT_GPIO_PIN(DT_ALIAS(sw0), gpios)): return 0;
-// 	case BIT(DT_GPIO_PIN(DT_ALIAS(sw1), gpios)): return 1;
-// 	case BIT(DT_GPIO_PIN(DT_ALIAS(sw2), gpios)): return 2;
-// 	case BIT(DT_GPIO_PIN(DT_ALIAS(sw3), gpios)): return 3;
-// 	}
-
-// 	printk("No match for GPIO pin 0x%08x\n", pin_pos);
-// 	return 0;
-// }
 struct buttonwork {
     struct k_work work;
-    uint8_t button_pressed;
+    uint8_t button_num;
+	uint8_t button_pressed;
 };
 
 static uint8_t trans_id = 0;
 
 static void button_pressed_worker(struct k_work *workitem)
 {
+	printk("button_pressed_worker\n");
 	struct buttonwork *button = CONTAINER_OF(workitem, struct buttonwork, work);
+
+	//only to test gamestate;
+	if(button->button_num == 1) {
+		
+		onoff_state[0].current = button->button_pressed;
+		if(button->button_pressed) {
+			onoff_state[0].istriggered =1;
+		};
+			
+		gamestate();
+		return;
+	} if (button->button_num ==2) {
+		onoff_state[1].current = button->button_pressed;
+		if(button->button_pressed) {
+			onoff_state[1].istriggered =1;
+		};
+		gamestate();
+		return;
+	}
 
 	struct bt_mesh_model *mod_cli; // *mod_srv;
 	struct bt_mesh_model_pub *pub_cli; // *pub_srv;
@@ -479,19 +545,6 @@ static void button_pressed_worker(struct k_work *workitem)
 K_WORK_DEFINE(button0_work, button_pressed_worker);
 
 
-static void button_pressed(const struct device *dev, struct gpio_callback *cb,
-			   uint32_t pin_pos)
-{	
-	int state1 = gpio_pin_get(dev, DT_GPIO_PIN(DT_ALIAS(sw0), gpios));		
-	//do the above but get button fro
-
-	struct buttonwork button0 = {
-        .button_pressed = state1,
-		.work = button0_work,
-    };
-	
-	k_work_submit(&button0.work);
-}
 
 
 
@@ -553,61 +606,143 @@ static void bt_ready(int err)
 
 
 
-static void setcallback() {
+static void sw_pressed(const struct device *dev, struct gpio_callback *cb,
+	uint32_t pin_pos) {
+		
+    struct gpio_dt_spec switches[] = {
+		GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios),
+#if DT_NODE_HAS_STATUS(DT_ALIAS(sw1), okay)	
+		GPIO_DT_SPEC_GET(DT_ALIAS(sw1), gpios),
+		GPIO_DT_SPEC_GET(DT_ALIAS(sw2), gpios),
+#endif
+	};
+	gpio_pin_t gpio_switches[] = {
+		DT_GPIO_PIN(DT_ALIAS(sw0), gpios),
+#if DT_NODE_HAS_STATUS(DT_ALIAS(sw1), okay)	
+		DT_GPIO_PIN(DT_ALIAS(sw1), gpios),
+		DT_GPIO_PIN(DT_ALIAS(sw2), gpios),
+#endif
+	};
+	for (size_t i = 0; i < ARRAY_SIZE(switches); i++)
+	{		
+		if (pin_pos == BIT(gpio_switches[i])){
+			int state = gpio_pin_get(dev, gpio_switches[i]);
+			printk("button %d changed, value is %d \n", i, state);
+			//delegate to seperate worker to avoid blocking
+			struct buttonwork button = {
+        		.button_pressed = state,
+				.button_num = i,
+				.work = button0_work,
+    		};
 	
-	
-	static struct gpio_callback button_cb;
-	static const struct gpio_dt_spec sw_device = GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
-	gpio_init_callback(&button_cb, button_pressed,  BIT(sw_device.pin));
-	__ASSERT(device_is_ready(sw_device.port), "Device not ready");
-	// if (!device_is_ready(sw_device.port)) {
-	// 	printk("GPIO controller device is not ready\n");
-	// 	return 0;
-	// }
-	gpio_pin_configure_dt(&sw_device, GPIO_INPUT);
-	gpio_pin_interrupt_configure_dt(&sw_device,  GPIO_INT_EDGE_BOTH);
-	gpio_add_callback(sw_device.port, &button_cb);
-	
-	//k_work_init(&button0.workitem, button_pressed_worker);
-	//k_timer_init(&sw.button_timer, button_cnt_timer, NULL);
+			k_work_submit(&button.work);
+		}		
+	}	
 }
 
+static struct gpio_callback button_cb;
+//const static struct gpio_dt_spec sw_device0 = GPIO_DT_SPEC_GET_OR(DT_ALIAS(sw1), gpios, {0});
+
+static void callbackbuttons() {	
+	struct gpio_dt_spec sw_device0 = GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
+
+#if DT_NODE_HAS_STATUS(DT_ALIAS(sw1), okay)	
+
+	struct gpio_dt_spec sw_device1 = GPIO_DT_SPEC_GET(DT_ALIAS(sw1), gpios);
+	struct gpio_dt_spec sw_device2 = GPIO_DT_SPEC_GET(DT_ALIAS(sw2), gpios);
+
+	__ASSERT(device_is_ready(sw_device1.port), "Device not ready");
+	__ASSERT(device_is_ready(sw_device2.port), "Device not ready");
+
+	gpio_pin_configure_dt(&sw_device1, GPIO_INPUT);
+	gpio_pin_configure_dt(&sw_device2, GPIO_INPUT);
+
+	gpio_pin_interrupt_configure_dt(&sw_device1, GPIO_INT_EDGE_BOTH);
+	gpio_pin_interrupt_configure_dt(&sw_device2, GPIO_INT_EDGE_BOTH);
+
+	gpio_add_callback(sw_device1.port, &button_cb);
+	gpio_add_callback(sw_device2.port, &button_cb);
+	
+	gpio_init_callback(&button_cb, sw_pressed, BIT(sw_device0.pin) | BIT(sw_device1.pin) | BIT(sw_device2.pin));
+#else
+	gpio_init_callback(&button_cb, sw_pressed, BIT(sw_device0.pin));
+#endif
+		
+	__ASSERT(device_is_ready(sw_device0.port), "Device not ready");
+
+	gpio_pin_configure_dt(&sw_device0, GPIO_INPUT);
+	
+	gpio_pin_interrupt_configure_dt(&sw_device0, GPIO_INT_EDGE_BOTH);
+	
+	gpio_add_callback(sw_device0.port, &button_cb);
+
+}
+
+#ifdef CONFIG_USB_DEVICE_STACK
+void enable_usbcdc()
+{	
+	const struct device *dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
+	__ASSERT(device_is_ready(dev), "console not ready");
+	uint32_t dtr = 0;
+
+	if (usb_enable(NULL)) {
+		return;
+	}
+
+	/* Poll if the DTR flag was set */
+	while (!dtr) {
+		uart_line_ctrl_get(dev, UART_LINE_CTRL_DTR, &dtr);
+		/* Give CPU resources to low priority threads. */
+		k_sleep(K_MSEC(100));
+	}	
+}
+#endif
 
 int main(void)
 {
 	int err;
+#ifdef CONFIG_USB_DEVICE_STACK
+	enable_usbcdc();
+	console_init();
+	k_sleep(K_MSEC(2000));
+	printk("delete flash? y/n\n");
+	uint8_t c = console_getchar();
+	if (c == 'y') {
+		printk("deleting flash\n");
+	 	bt_mesh_reset();
+
+	} else {
+	 	printk("not deleting flash: %c\n", c);
+	}
+#endif
+	err = gpio_pin_configure_dt(&flashlight, GPIO_OUTPUT_INACTIVE);
 
 	printk("Initializing...\n");
+			
+	callbackbuttons();
+	err = init_clock();
+	if(err) {
+		printk("Error initializing shift register\n");
+		return 0;
+	}
 
-	/* Initialize the button debouncer */
-	// last_time = k_uptime_get_32();
-
-	/* Initialize button worker task*/
-	 
-
-	/* Initialize button count timer */
-	// 
-
+	//k_work_init_delayable(&attention_blink_work, attention_blink);
 	
-
-	//for (i = 0; i < ARRAY_SIZE(sw_device); i++) {
 	
-	//}
+	// Initialize LED's 
 	
-	setcallback();
-	k_work_init_delayable(&attention_blink_work, attention_blink);
-	/* Initialize LED's */
-	//for (i = 0; i < ARRAY_SIZE(onoff_state); i++) {
 	for(int x=0; x< ARRAY_SIZE(onoff_state); x++) {
 		__ASSERT(device_is_ready(onoff_state[x].led_device.port), "LED GPIO controller device is not ready\n");			
 		gpio_pin_configure_dt(&onoff_state[x].led_device, GPIO_OUTPUT_INACTIVE);
 	}	
-	//}
-
+	
 	/* Initialize the Bluetooth Subsystem */	
 	err = bt_enable(bt_ready);
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
 	}
+			
 	return 0;
 }
+
+
